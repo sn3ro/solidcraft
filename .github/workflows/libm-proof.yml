@@ -1,23 +1,14 @@
-# Throwaway: goldens on macOS arm64 and Linux x86_64 for #15405 (one libm). Not for main.
-name: libm proof (goldens macOS vs Linux)
+# Throwaway: do #15405's outcome tests already differ on macOS on main?
+name: libm proof (outcome tests on macOS main)
 on:
   push:
     branches: [proof/one-libm-goldens]
 permissions:
   contents: read
 jobs:
-  goldens:
-    name: goldens ${{ matrix.src }} on ${{ matrix.os }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: macos, runner: blacksmith-12vcpu-macos-15, src: main }
-          - { os: macos, runner: blacksmith-12vcpu-macos-15, src: branch }
-          - { os: linux, runner: blacksmith-16vcpu-ubuntu-2404, src: main }
-          - { os: linux, runner: blacksmith-16vcpu-ubuntu-2404, src: branch }
+  tests:
+    runs-on: blacksmith-12vcpu-macos-15
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: solidcore
@@ -26,51 +17,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ matrix.src == 'main' && 'b727fad012aebc4a2be3624eb116c404e8380400' || 'e98800ca2077d3e1b9060a9aba1fc1d653d2ba52' }}
-      - name: Toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-      - name: Upstream sources (TestFiles)
-        run: |
-          while IFS='=' read -r k v; do
-            case "$k" in
-              UPSTREAM_REPO|UPSTREAM_VERSION|UPSTREAM_COMMIT) export "$k=$v" ;;
-            esac
-          done < scripts/upstream-pin.env
-          git init upstream
-          git -C upstream remote add origin "$UPSTREAM_REPO"
-          git -C upstream fetch --depth 1 origin "$UPSTREAM_COMMIT" || git -C upstream fetch origin
-          git -C upstream checkout --detach "$UPSTREAM_COMMIT"
-      - name: Build goldens (goldens profile)
+          ref: 1df54142f77723b40c5a7ab1100ae1c0576950fc
+      - run: rustup show active-toolchain || rustup toolchain install
+      - name: Tests on main
         run: |
           uname -a
-          cargo build --profile goldens -p goldens
-          mkdir -p dist && cp bin/goldens/goldens dist/goldens
-      - name: Every unit against the committed (Linux-blessed) set
-        continue-on-error: true
-        run: dist/goldens --all --goldens --jobs 0 --no-report 2>&1 | tee ../goldens-check.log | tail -n 40
-      - name: Bless here
-        run: |
-          dist/goldens --all --bless --jobs 0 --no-report > /dev/null
-          echo "files changed by the bless here:"; git diff --stat -- crates/goldens/expected | tail -n 3
-          mkdir -p ../out && cp -R crates/goldens/expected ../out/expected && cp ../goldens-check.log ../out/
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: goldens-${{ matrix.src }}-${{ matrix.os }}
-          path: out/
-          retention-days: 7
-  compare:
-    needs: goldens
-    if: ${{ !cancelled() }}
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          path: a
-      - name: macOS bless vs Linux bless
-        run: |
-          for src in main branch; do
-            m=a/goldens-$src-macos/expected l=a/goldens-$src-linux/expected
-            n=$(diff -rq "$m" "$l" | wc -l)
-            rows=$(for f in "$l"/*; do b=$(basename "$f"); diff <(sort "$f") <(sort "$m/$b") | grep -c '^>' ; done | awk '{s+=$1} END {print s+0}')
-            echo "$src: unit files differing macOS vs Linux: $n; rows differing: $rows"
-          done
+          cargo test --no-fail-fast --profile goldens -p solidcore \
+            --test wr_407_swept_arc_walls_join_without_fold --test issue_2975_stitch_gap_report \
+            --test fillet_round_failure_notes_status --test wr512_singular_start_inside_direction \
+            --test issue_2365_nxn_setback_corners --test issue_2223_section_end_trim_at_creases \
+            --test issue_2314_tab_corner_arcs -- --test-threads 8 2>&1 | grep -E "^test |panicked|test result" -A1 || true
+          cargo test --profile goldens -p solidcore-convert --test issue_3185_label_margins 2>&1 | grep -E "^test |panicked|margin 0.0|test result" -A1 || true
